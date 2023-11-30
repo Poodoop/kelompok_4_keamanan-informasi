@@ -179,6 +179,9 @@ func main() {
 			// Bandingkan nonce 1 yang diterima dengan nonce 1 original
 			if string(nonce1) != string(nonce1_original) {
 				fmt.Println("Nonce yang diterima salah!")
+
+				hasError = true
+				break
 			}
 
 			fmt.Println("Mengirim nonce 2 yang diterima dari server (B) yang dienkripsi")
@@ -209,7 +212,7 @@ func main() {
 			secretKey := []byte("secretkeysecretkeysecretkeysecretkey")
 			secretKey = secretKey[:32] // Ambil 32 bytes pertama
 
-			// Buat hash dari secret key
+			// Buat hash dan signature dari secret key
 			secretKeyHash := sha256.New()
 			_, err = secretKeyHash.Write(secretKey)
 			checkError(err)
@@ -225,6 +228,7 @@ func main() {
 
 			// Jika ukuran data lebih besar dari ukuran key,
 			// bagi menjadi beberapa blok
+			// https://stackoverflow.com/questions/62348923/rs256-message-too-long-for-rsa-public-key-size-error-signing-jwt
 			blockSize := serverPublicKey.Size() - 2*sha256.New().Size() - 2
 
 			if len(data) > blockSize {

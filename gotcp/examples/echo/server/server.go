@@ -107,9 +107,8 @@ func (this *Callback) OnConnect(c *gotcp.Conn) bool {
 func (this *Callback) OnMessage(c *gotcp.Conn, p gotcp.Packet) bool {
 	echoPacket := p.(*echo.EchoPacket)
 
-	// packetLen := echoPacket.GetLength()
+	packetLen := echoPacket.GetLength()
 	packetBody := echoPacket.GetBody()
-	// packetStr := string(packetBody)
 
 	var reply = []byte("")
 
@@ -309,7 +308,7 @@ func (this *Callback) OnMessage(c *gotcp.Conn, p gotcp.Packet) bool {
 		REPLY_STEP = 0
 	}
 
-	// fmt.Printf("OnMessage:[%v] [%v]\n", packetLen, packetBody)
+	fmt.Printf("OnMessage:[%v] [%v]\n\n", packetLen, string(packetBody))
 	c.AsyncWritePacket(echo.NewEchoPacket(reply, false), time.Second)
 
 	return true
