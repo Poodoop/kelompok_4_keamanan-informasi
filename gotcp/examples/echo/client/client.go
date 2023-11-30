@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"crypto"
-	"crypto/aes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -17,6 +16,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/LarryBattle/nonce-golang"
 	"github.com/gansidui/gotcp/examples/echo"
 )
 
@@ -82,28 +82,6 @@ func LoadPublicKey(public_key_file string) (*rsa.PublicKey, error) {
 	return pub_parsed, err
 }
 
-func encrypt(key []byte, data []byte) (cipherText []byte) {
-	// Buat AES cipher
-	block, err := aes.NewCipher(key)
-	checkError(err)
-
-	// Hitung jumlah bytes untuk plain text dan cipher text
-	byteCount := ((len(data) + aes.BlockSize - 1) / aes.BlockSize) * aes.BlockSize
-
-	plainText := make([]byte, byteCount)
-	cipherText = make([]byte, byteCount)
-
-	// Copy data ke plainText
-	for i := 0; i < len(data); i++ {
-		plainText[i] = data[i]
-	}
-
-	// Enkripsi data menggunakan AES
-	block.Encrypt(cipherText, plainText)
-
-	return cipherText
-}
-
 func main() {
 	tcpAddr, err := net.ResolveTCPAddr("tcp4", "127.0.0.1:8989")
 	checkError(err)
@@ -121,66 +99,184 @@ func main() {
 	_, err = LoadPublicKey("server_public.key")
 	checkError(err)
 
-	// Session key dari client
-	sessionKey := []byte("1234567812345678")
+	// Untuk menyimpan data bytes dari server
+	packetBytes := []byte("asd")
 
 	/*
 
-		Step 1:	Kirim hash dari username dan password yang sudah dienkripsi
-				menggunakan private key dari client (pakai RSA)
+		Step 1:	Kirim ID dan nonce 1 ke server (B), enkripsi menggunakan public key dari server (B)
 
-		Step 2:	Kirim session key yang sudah dienkripsi menggunakan
-				public key dari server (pakai RSA juga)
+		Step 2:	Menerima nonce 1 dan nonce 2 dari server (B) yang dienkripsi menggunakan public key
+				dari client (A).
 
-		Step 3:	Kirim data yang sudah dienkripsi menggunakan session key
-				dari client (pakai AES)
+				Kirim nonce 2, enkripsi menggunakan public key dari server (B)
+
+		Step 3:	Kirim secret key yang dienkripsi menggunakan private key client (A), kemudian
+				dienkripsi lagi menggunakan public key dari server (B)
 
 	*/
+
+	var nonce1_original = []byte("")
+	var hasError = false
+
 	for i := 0; i < 3; i++ {
 		switch i {
 
 		// Step 1
 		case 0:
-			fmt.Println("Mengirim message yang disign menggunakan private key dari client.")
+			fmt.Println("===== Step 1 =====")
 
-			message := []byte("clientmessage")
-			messageHash := sha256.New()
-			_, err := messageHash.Write(message)
-			checkError(err)
+			fmt.Println("Mengirim ID dari client (A) dan nonce 1 yang dienkripsi")
+			fmt.Println("menggunakan public key dari server (B)")
 
-			messageHashSum := messageHash.Sum(nil)
+			// Buat ID A, panjang ID 32 byte
+			id := []byte(nonce.NewToken())
 
-			signature, err := rsa.SignPSS(rand.Reader, clientPrivateKey, crypto.SHA256, messageHashSum, nil)
-			checkError(err)
+			// Buat nonce 1, panjang nonce adalah 32 byte
+			nonce1 := []byte(nonce.NewToken())
 
-			// Kirim data ke server
-			conn.Write(echo.NewEchoPacket(signature, false).Serialize())
+			// Simpan nonce 1 yang original untuk dicek di step berikutnya
+			nonce1_original = nonce1
 
-		// Step 2
-		case 1:
-			// Enkripsi session key menggunakan public key dari server
+			// Gabungkan ID A dan nonce 1
+			data := append(id, nonce1...)
+
+			// Enkripsi menggunakan public key dari server (B)
 			encryptedData, err := rsa.EncryptOAEP(
 				sha256.New(),
 				rand.Reader,
 				serverPublicKey,
-				sessionKey,
+				data,
 				[]byte(""),
 			)
 			checkError(err)
 
-			fmt.Println("Mengirim session key dari client yang sudah dienkripsi menggunakan public key dari server.")
+			// Kirim data ke server
+			conn.Write(echo.NewEchoPacket(encryptedData, false).Serialize())
+
+			fmt.Println()
+
+		// Step 2
+		case 1:
+			fmt.Println("===== Step 2 =====")
+
+			fmt.Println("Mendekripsi data yang diterima dari server (B)")
+			fmt.Println("menggunakan private key dari client (A)")
+
+			decryptedBytes, err := clientPrivateKey.Decrypt(
+				nil,
+				packetBytes,
+				&rsa.OAEPOptions{Hash: crypto.SHA256},
+			)
+
+			// Ambil nonce 1 dan nonce 2
+			nonce1 := decryptedBytes[:32]
+			nonce2 := decryptedBytes[32:]
+
+			fmt.Println("Nonce 1 = " + string(nonce1))
+			fmt.Println("Nonce 2 = " + string(nonce2))
+
+			// Bandingkan nonce 1 yang diterima dengan nonce 1 original
+			if string(nonce1) != string(nonce1_original) {
+				fmt.Println("Nonce yang diterima salah!")
+			}
+
+			fmt.Println("Mengirim nonce 2 yang diterima dari server (B) yang dienkripsi")
+			fmt.Println("menggunakan public key dari server (B)")
+
+			// Enkripsi nonce 2 menggunakan public key dari server (B)
+			encryptedData, err := rsa.EncryptOAEP(
+				sha256.New(),
+				rand.Reader,
+				serverPublicKey,
+				nonce2,
+				[]byte(""),
+			)
+			checkError(err)
 
 			conn.Write(echo.NewEchoPacket(encryptedData, false).Serialize())
 
+			fmt.Println()
+
 		// Step 3
 		case 2:
-			fmt.Println("Mengirim data yang sudah dienkripsi menggunakan session key dari client.")
+			fmt.Println("===== Step 3 =====")
 
-			data := encrypt(sessionKey, []byte("secret message.."))
+			fmt.Println("Mengirim secret key yang disign menggunakan private key")
+			fmt.Println("dari client (A), kemudian dienkripsi lagi menggunakan")
+			fmt.Println("public key dari server (B)")
 
-			conn.Write(echo.NewEchoPacket(data, false).Serialize())
+			secretKey := []byte("secretkeysecretkeysecretkeysecretkey")
+			secretKey = secretKey[:32] // Ambil 32 bytes pertama
+
+			// Buat hash dari secret key
+			secretKeyHash := sha256.New()
+			_, err = secretKeyHash.Write(secretKey)
+			checkError(err)
+			secretKeyHashSum := secretKeyHash.Sum(nil)
+
+			signature, err := rsa.SignPSS(rand.Reader, clientPrivateKey, crypto.SHA256, secretKeyHashSum, nil)
+			checkError(err)
+
+			// Gabungkan secret key dengan signature dari secret key
+			_ = signature
+			data := append(secretKey, signature...)
+			encryptedData := []byte("")
+
+			// Jika ukuran data lebih besar dari ukuran key,
+			// bagi menjadi beberapa blok
+			blockSize := serverPublicKey.Size() - 2*sha256.New().Size() - 2
+
+			if len(data) > blockSize {
+				blockCount := (len(data) + blockSize - 1) / blockSize
+
+				// Enkripsi data secret key dan signature dari secret key
+				// menggunakan public key dari server (B)
+				for i := 0; i < blockCount; i++ {
+					encryptedBlock := []byte("")
+
+					if i < blockCount-1 {
+						encryptedBlock, err = rsa.EncryptOAEP(
+							sha256.New(),
+							rand.Reader,
+							serverPublicKey,
+							data[blockSize*i:blockSize*(i+1)],
+							[]byte(""),
+						)
+						checkError(err)
+					} else {
+						encryptedBlock, err = rsa.EncryptOAEP(
+							sha256.New(),
+							rand.Reader,
+							serverPublicKey,
+							data[blockSize*i:],
+							[]byte(""),
+						)
+						checkError(err)
+					}
+
+					encryptedData = append(encryptedData, encryptedBlock...)
+				}
+			} else {
+				encryptedData, err = rsa.EncryptOAEP(
+					sha256.New(),
+					rand.Reader,
+					serverPublicKey,
+					data,
+					[]byte(""),
+				)
+				checkError(err)
+			}
+
+			conn.Write(echo.NewEchoPacket(encryptedData, false).Serialize())
+
+			fmt.Println()
 
 		default:
+			break
+		}
+
+		if hasError {
 			break
 		}
 
@@ -189,10 +285,13 @@ func main() {
 		if err == nil {
 			echoPacket := p.(*echo.EchoPacket)
 
-			packetLen := echoPacket.GetLength()
-			packetBody := string(echoPacket.GetBody())
+			// Simpan data yang diterima dari server
+			packetBytes = echoPacket.GetBody()
 
-			fmt.Printf("Server reply:[%v] [%v]\n", packetLen, packetBody)
+			packetLen := echoPacket.GetLength()
+			packetBody := string(packetBytes)
+
+			fmt.Printf("Server reply:[%v] [%v]\n\n", packetLen, packetBody)
 
 			if packetBody == "failed" {
 				break
